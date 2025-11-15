@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>YouTube Auto-Refresh Player (120s)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; max-width:900px; margin:24px auto; padding:16px; color:#111; }
+    h1 { font-size:20px; margin-bottom:8px; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+    input[type="text"] { min-width: 320px; padding:8px 10px; border:1px solid #ccc; border-radius:6px; }
+    button { padding:8px 12px; border-radius:6px; border:1px solid #0b63d6; background:#0b63d6; color:white; cursor:pointer; }
+    button.ghost { background:transparent; color:#0b63d6; border:1px solid #0b63d6; }
+    #player { width:100%; max-width:800px; height:450px; background:#000; margin-top:10px; border-radius:8px; overflow:hidden; }
+    .status { margin-top:10px; color:#333; }
+    .error { color:#c00; }
+    label.small { font-size:13px; color:#555; margin-right:8px; }
+    .timer { font-weight:600; color:#0b63d6; }
+  </style>
+</head>
+<body>
+  <h1>YouTube Player — 120 সেকেন্ড পর পর ভিডিও রিফ্রেশ করবে</h1>
+  <p>আপনি YouTube ভিডিওর লিংক বা ভিডিও ID এখানে পেস্ট করুন, তারপর <strong>Play</strong> চাপুন। ভিডিওটি প্লে হলে প্রতি 120 সেকেন্ড পরে ভিডিওটি শুরু থেকেই (seek to 0) আবার প্লে হবে।</p>
+
+  <div class="controls">
+    <label class="small" for="url">YouTube link / ID:</label>
+    <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ বা শুধু ভিডিও ID" />
+    <button id="playBtn">Play</button>
+    <button id="stopBtn" class="ghost">Stop Auto-refresh</button>
+    <button id="restartNow" class="ghost">Restart Now</button>
+  </div>
+
+  <div id="player"></div>
+
+  <div class="status">
+    <div id="message">স্ট্যাটাস: অপেক্ষা করুন...</div>
+    <div id="countdown" style="margin-top:6px;">পরবর্তী রিফ্রেশ: <span class="timer">-</span> সেকেন্ড</div>
+  </div>
+
+  <script>
+    // Default interval in milliseconds (120 seconds)
+    const REFRESH_MS = 120 * 1000;
+
+    // Utility: extract YouTube video ID from various URL formats or return input if likely ID
+    function parseYouTubeId(input) {
+      if (!input) return '';
+      input = input.trim();
+
+      // Common URL patterns
+      const patterns = [
+        /(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/,
+        /(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([A-Za-z0-9_-]{11})/,
+        /(?:https?:\/\/)?youtu\.be\/([A-Za-z0-9_-]{11})/,
+        /(?:https?:\/\/)?m\.youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/
+      ];
+      for (const rx of patterns) {
+        const m = input.match(rx);
+        if (m && m[1]) return m[1];
+      }
+
+      // If the input is 11 chars likely an ID
+      if (/^[A-Za-z0-9_-]{11}$/.test(input)) return input;
+
+      return '';
+    }
+
+    let player = null;
+    let intervalId = null;
+    let countdownTimer = null;
+    let timeLeftSec = null;
+
+    const msgEl = document.getElementById('message');
+    const cdEl = document.querySelector('.timer');
+    const urlInput = document.getElementById('url');
+    const playBtn = document.getElementById('playBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const restartNowBtn = document.getElementById('restartNow');
+
+    function setMessage(text, isError=false) {
+      msgEl.textContent = 'স্ট্যাটাস: ' + text;
+      msgEl.className = isError ? 'error' : '';
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh(); // clear existing
+      timeLeftSec = Math.floor(REFRESH_MS / 1000);
+      cdEl.textContent = timeLeftSec;
+      countdownTimer = setInterval(() => {
+        timeLeftSec -= 1;
+        if (timeLeftSec <= 0) {
+          // restart video
+          restartVideo();
+          timeLeftSec = Math.floor(REFRESH_MS / 1000);
+        }
+        cdEl.textContent = timeLeftSec;
+      }, 1000);
+
+      // backup interval in case setInterval tick misfires; this ensures restart happens at REFRESH_MS
+      intervalId = setInterval(() => {
+        restartVideo();
+      }, REFRESH_MS);
+      setMessage('Auto-refresh চালু হয়েছে — প্রতি 120s পরে ভিডিও রিপ্লে হবে।');
+      stopBtn.textContent = 'Stop Auto-refresh';
+    }
+
+    function stopAutoRefresh() {
+      if (intervalId) { clearInterval(intervalId); intervalId = null; }
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      cdEl.textContent = '-';
+      setMessage('Auto-refresh বন্ধ আছে।');
+      stopBtn.textContent = 'Start Auto-refresh';
+    }
+
+    function restartVideo() {
+      if (!player || typeof player.seekTo !== 'function') {
+        setMessage('কোনো প্লেয়ার নেই (প্রথমে Play চাপুন)।', true);
+        return;
+      }
+      try {
+        // seek to 0 seconds and play
+        player.seekTo(0, true);
+        player.playVideo();
+        setMessage('ভিডিও রিস্টার্ট করা হয়েছে।');
+      } catch (e) {
+        // fallback: reload the iframe by loading the same video
+        const currentId = player.getVideoData ? player.getVideoData().video_id : null;
+        if (currentId) {
+          player.loadVideoById(currentId, 0, "large");
+          setMessage('ভিডিও রিলোড করা হয়েছে (fallback)।');
+        } else {
+          setMessage('রিস্টার্ট করতে সমস্যা হয়েছে।', true);
+        }
+      }
+    }
+
+    // Load YouTube IFrame API
+    (function loadYouTubeAPI() {
+      const tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(tag);
+    })();
+
+    // Called by YouTube API when ready
+    function onYouTubeIframeAPIReady() {
+      // nothing here yet; we create player on demand when Play pressed
+      setMessage('YouTube API প্রস্তুত — লিংক দিন এবং Play চাপুন।');
+    }
+
+    // Expose the API callback globally
+    window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
+
+    // Create or load a video into the player
+    function loadAndPlayVideo(videoId) {
+      if (!videoId) {
+        setMessage('ভূল ইউটিউব লিংক/ID।', true);
+        return;
+      }
+
+      if (!player) {
+        player = new YT.Player('player', {
+          height: '450',
+          width: '800',
+          videoId: videoId,
+          playerVars: {
+            'autoplay': 1,
+            'controls': 1,
+            'rel': 0,
+            'modestbranding': 1,
+            'playsinline': 1
+          },
+          events: {
+            'onReady': function(e) {
+              // try to play (user must have initiated)
+              e.target.playVideo();
+              setMessage('ভিডিও প্লে হচ্ছে।');
+              startAutoRefresh();
+            },
+            'onError': function(e) {
+              setMessage('YouTube প্লেয়ার error: ' + e.data, true);
+            },
+            'onStateChange': function(e) {
+              // if video ended before 120s, we still let auto-refresh mechanism handle restarts
+            }
+          }
+        });
+      } else {
+        // replace currently playing video
+        try {
+          player.loadVideoById(videoId, 0, "large");
+          player.playVideo();
+          setMessage('নতুন ভিডিও লোড ও প্লে হচ্ছে।');
+          startAutoRefresh();
+        } catch (err) {
+          setMessage('ভিডিও লোড করতে সমস্যা হয়েছে।', true);
+        }
+      }
+    }
+
+    playBtn.addEventListener('click', () => {
+      const raw = urlInput.value;
+      const id = parseYouTubeId(raw);
+      if (!id) {
+        setMessage('দয়া করে সঠিক YouTube লিংক বা 11-character ভিডিও ID দিন।', true);
+        return;
+      }
+      setMessage('ভিডিও লোড করা হচ্ছে...');
+      // If YT not ready yet, wait a moment (YouTube API script should load quickly)
+      if (typeof YT === 'undefined' || typeof YT.Player === 'undefined') {
+        setMessage('YouTube API লোডিং হচ্ছে, অনুগ্রহ করে কয়েক সেকেন্ড অপেক্ষা করুন...');
+        // Poll until ready then load
+        const readyPoll = setInterval(() => {
+          if (typeof YT !== 'undefined' && typeof YT.Player !== 'undefined') {
+            clearInterval(readyPoll);
+            loadAndPlayVideo(id);
+          }
+        }, 250);
+      } else {
+        loadAndPlayVideo(id);
+      }
+    });
+
+    stopBtn.addEventListener('click', () => {
+      if (intervalId || countdownTimer) {
+        stopAutoRefresh();
+      } else {
+        startAutoRefresh();
+      }
+    });
+
+    restartNowBtn.addEventListener('click', () => {
+      restartVideo();
+      // reset countdown
+      timeLeftSec = Math.floor(REFRESH_MS / 1000);
+    });
+
+    // initial UI state
+    stopAutoRefresh();
+    setMessage('প্রস্তুত — লিংক দিন এবং Play চাপুন।');
+  </script>
+</body>
+</html>
